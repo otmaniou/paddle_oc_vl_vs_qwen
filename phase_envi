@@ -1,18 +1,33 @@
-try:
-    import torch
+echo "========== SYSTEM =========="
+uname -a
 
-    print("Torch :", torch.__version__)
-    print("CUDA Torch :", torch.version.cuda)
-    print("CUDA disponible :", torch.cuda.is_available())
+echo
+echo "========== PYTHON =========="
+which python
+python --version
 
-    if torch.cuda.is_available():
-        print("GPU :", torch.cuda.get_device_name(0))
-        print("Compute capability :", torch.cuda.get_device_capability(0))
-        print(
-            "VRAM :",
-            round(torch.cuda.get_device_properties(0).total_memory / 1024**3, 2),
-            "GB"
-        )
+echo
+echo "========== PIP =========="
+which pip
+python -m pip --version
 
-except Exception as e:
-    print("Torch erreur :", repr(e))
+echo
+echo "========== GPU / DRIVER / CUDA =========="
+nvidia-smi
+
+echo
+echo "========== NVCC =========="
+which nvcc || echo "nvcc absent"
+nvcc --version 2>/dev/null || true
+
+echo
+echo "========== GCC =========="
+gcc --version 2>/dev/null || echo "gcc absent"
+
+echo
+echo "========== CONDA =========="
+echo "CONDA_PREFIX=$CONDA_PREFIX"
+
+echo
+echo "========== PACKAGES INITIAUX =========="
+python -m pip list
