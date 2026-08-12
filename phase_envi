@@ -1,18 +1,24 @@
-python - <<'PY'
 import sys
+import os
 
-print("Python :", sys.version)
-print("\n--- TEST FINEGRAINED FP8 ---")
+FP8_PATH = "/domino/edv/modelhub/ModelHub-model-huggingface-kernels-community/finegrained-fp8/main/build/torch-cuda"
+
+print("Chemin existe :", os.path.exists(FP8_PATH))
+print("Contenu       :", os.listdir(FP8_PATH))
+
+if FP8_PATH not in sys.path:
+    sys.path.insert(0, FP8_PATH)
+
+print("\n--- TEST IMPORT ---")
 
 try:
     import finegrained_fp8
-    print("IMPORT finegrained_fp8 : OK")
-    print("Chemin :", finegrained_fp8.__file__)
 
-    print("\nContenu exposé :")
-    print([x for x in dir(finegrained_fp8) if not x.startswith("_")])
+    print("IMPORT : OK")
+    print("Module :", finegrained_fp8)
+    print("Fichier:", finegrained_fp8.__file__)
+    print("Fonctions:", [x for x in dir(finegrained_fp8) if not x.startswith("_")])
 
 except Exception as e:
-    print("IMPORT finegrained_fp8 : ERREUR")
+    print("IMPORT : ERREUR")
     print(type(e).__name__, ":", e)
-PY
