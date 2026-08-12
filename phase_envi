@@ -1,20 +1,132 @@
+import torch
 import finegrained_fp8
-import inspect
+import time
 
-print("=== SOURCE / SIGNATURES UTILES ===")
+print("=== TEST MATMUL FP8 CORRIGE ===")
 
-for name in dir(finegrained_fp8):
-    if "quant" in name.lower():
-        obj = getattr(finegrained_fp8, name)
+M = 256
+N = 256
+K = 256
 
-        print("\nFUNCTION :", name)
+BLOCK_N = 128
+BLOCK_K = 128
 
-        try:
-            print("SIGNATURE:", inspect.signature(obj))
-        except Exception as e:
-            print("Signature indisponible:", e)
+# ---------------------------
+# A : activations
+# ---------------------------
 
-        try:
-            print(inspect.getsource(obj)[:4000])
-        except Exception:
-            pass
+A = torch.randn(
+    (M, K),
+    device="cuda",
+    dtype=torch.bfloat16
+)
+
+A_fp8, As = finegrained_fp8.fp8_act_quant(
+    A,
+    block_size=BLOCK_K
+)
+
+# ---------------------------
+# B : poids
+# ---------------------------
+
+B = torch.randn(
+    (N, K),
+    device="cuda",
+    dtype=torch.bfloat16
+)
+
+# Quantification block-wise 128 x 128
+B_blocks = B.reshape(
+    N // BLOCK_N,
+    BLOCK_N,
+    K // BLOCK_K,
+    BLOCK_K
+)
+
+# [N/block_n, K/block_k]
+Bs = (
+    B_blocks.abs()
+    .amax(dim=(1, 3))
+    .float()
+    / 448.0
+)
+
+# éviter division par zéro
+Bs = torch.clamp(Bs, min=1e-12)
+
+# Réapplication des scales aux blocs
+B_scaled = B_blocks / Bs[:, None, :, None]
+
+B_fp8 = (
+    B_scaled
+    .reshape(N, K)
+    .to(torch.float8_e4m3fn)
+)
+
+print("A_fp8 :", A_fp8.shape, A_fp8.dtype)
+print("As     :", As.shape, As.dtype)
+
+print("B_fp8 :", B_fp8.shape, B_fp8.dtype)
+print("Bs     :", Bs.shape, Bs.dtype)
+
+print("\nAttendu Bs :",
+      (N // BLOCK_N, K // BLOCK_K))
+
+assert tuple(Bs.shape) == (
+    N // BLOCK_N,
+    K // BLOCK_K
+)
+
+# ---------------------------
+# MATMUL
+# ---------------------------
+
+torch.cuda.synchronize()
+t0 = time.perf_counter()
+
+try:
+
+    C = finegrained_fp8.w8a8_block_fp8_matmul(
+        A_fp8,
+        B_fp8,
+        As,
+        Bs,
+        block_size=[BLOCK_N, BLOCK_K],
+        output_dtype=torch.bfloat16
+    )
+
+    torch.cuda.synchronize()
+
+    elapsed = (
+        time.perf_counter() - t0
+    ) * 1000
+
+    print("\n==============================")
+    print("FP8 MATMUL : OK")
+    print("==============================")
+
+    print("C shape  :", C.shape)
+    print("C dtype  :", C.dtype)
+    print("C device :", C.device)
+
+    print("Temps :", round(elapsed, 3), "ms")
+
+    # Vérification numérique
+    C_ref = A @ B.T
+
+    erreur = (
+        (C.float() - C_ref.float())
+        .abs()
+        .mean()
+        .item()
+    )
+
+    print("Erreur moyenne vs BF16 :", erreur)
+
+except Exception as e:
+
+    print("\n=== ERREUR MATMUL ===")
+    print(type(e).__name__, ":", e)
+
+    raise
