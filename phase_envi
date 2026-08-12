@@ -1,33 +1,54 @@
-echo "========== SYSTEM =========="
-uname -a
-
-echo
 echo "========== PYTHON =========="
 which python
 python --version
-
-echo
-echo "========== PIP =========="
-which pip
 python -m pip --version
 
 echo
-echo "========== GPU / DRIVER / CUDA =========="
+echo "========== GPU / CUDA =========="
 nvidia-smi
 
 echo
-echo "========== NVCC =========="
-which nvcc || echo "nvcc absent"
-nvcc --version 2>/dev/null || true
+echo "========== PYTORCH =========="
+python - <<'PY'
+try:
+    import torch
+    print("torch             :", torch.__version__)
+    print("CUDA torch        :", torch.version.cuda)
+    print("CUDA disponible   :", torch.cuda.is_available())
+    if torch.cuda.is_available():
+        print("GPU               :", torch.cuda.get_device_name(0))
+        print("Compute capability:", torch.cuda.get_device_capability(0))
+except Exception as e:
+    print("ERREUR:", repr(e))
+PY
 
 echo
-echo "========== GCC =========="
-gcc --version 2>/dev/null || echo "gcc absent"
+echo "========== QWEN / TRANSFORMERS =========="
+python -m pip show torch torchvision transformers accelerate safetensors tokenizers qwen-vl-utils
 
 echo
-echo "========== CONDA =========="
-echo "CONDA_PREFIX=$CONDA_PREFIX"
+echo "========== FP8 / KERNELS =========="
+python -m pip list | grep -Ei "fp8|flash|triton|cutlass|transformer-engine|vllm|sglang|qwen|kernels"
 
 echo
-echo "========== PACKAGES INITIAUX =========="
+echo "========== TEST IMPORTS =========="
+python - <<'PY'
+mods = [
+    "transformers",
+    "accelerate",
+    "safetensors",
+    "tokenizers",
+    "triton",
+]
+
+for m in mods:
+    try:
+        x = __import__(m)
+        print(f"{m:25} OK   version={getattr(x, '__version__', 'N/A')}")
+    except Exception as e:
+        print(f"{m:25} ABSENT/ERREUR : {e}")
+PY
+
+echo
+echo "========== PACKAGES COMPLETS =========="
 python -m pip list
