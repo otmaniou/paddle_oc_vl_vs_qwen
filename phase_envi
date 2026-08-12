@@ -1,54 +1,44 @@
-echo "========== PYTHON =========="
-which python
-python --version
-python -m pip --version
-
-echo
-echo "========== GPU / CUDA =========="
-nvidia-smi
-
-echo
-echo "========== PYTORCH =========="
 python - <<'PY'
-try:
-    import torch
-    print("torch             :", torch.__version__)
-    print("CUDA torch        :", torch.version.cuda)
-    print("CUDA disponible   :", torch.cuda.is_available())
-    if torch.cuda.is_available():
-        print("GPU               :", torch.cuda.get_device_name(0))
-        print("Compute capability:", torch.cuda.get_device_capability(0))
-except Exception as e:
-    print("ERREUR:", repr(e))
-PY
+import sys
+import importlib.metadata as md
 
-echo
-echo "========== QWEN / TRANSFORMERS =========="
-python -m pip show torch torchvision transformers accelerate safetensors tokenizers qwen-vl-utils
+print("=== PYTHON ===")
+print(sys.version)
 
-echo
-echo "========== FP8 / KERNELS =========="
-python -m pip list | grep -Ei "fp8|flash|triton|cutlass|transformer-engine|vllm|sglang|qwen|kernels"
-
-echo
-echo "========== TEST IMPORTS =========="
-python - <<'PY'
-mods = [
+packages = [
+    "torch",
+    "torchvision",
+    "triton",
     "transformers",
     "accelerate",
     "safetensors",
     "tokenizers",
-    "triton",
+    "huggingface-hub",
+    "kernels",
 ]
 
-for m in mods:
+print("\n=== PACKAGES ===")
+for p in packages:
     try:
-        x = __import__(m)
-        print(f"{m:25} OK   version={getattr(x, '__version__', 'N/A')}")
-    except Exception as e:
-        print(f"{m:25} ABSENT/ERREUR : {e}")
-PY
+        print(f"{p:20s}: {md.version(p)}")
+    except md.PackageNotFoundError:
+        print(f"{p:20s}: ABSENT")
 
-echo
-echo "========== PACKAGES COMPLETS =========="
-python -m pip list
+print("\n=== CUDA / GPU ===")
+try:
+    import torch
+    print("torch CUDA :", torch.version.cuda)
+    print("CUDA dispo :", torch.cuda.is_available())
+    if torch.cuda.is_available():
+        print("GPU        :", torch.cuda.get_device_name(0))
+        print("Capability :", torch.cuda.get_device_capability(0))
+except Exception as e:
+    print("ERREUR :", repr(e))
+
+print("\n=== FINEGRAINED FP8 ===")
+try:
+    from kernels import get_kernel
+    print("import kernels : OK")
+except Exception as e:
+    print("import kernels : ERREUR", repr(e))
+PY
