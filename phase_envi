@@ -61,3 +61,34 @@ for package in packages:
         print(f"{package:<25} {md.version(package)}")
     except md.PackageNotFoundError:
         print(f"{package:<25} NON INSTALLE")
+
+
+
+
+
+
+
+
+
+
+
+
+
+try:
+    import torch
+
+    print("Torch :", torch.__version__)
+    print("CUDA Torch :", torch.version.cuda)
+    print("CUDA disponible :", torch.cuda.is_available())
+
+    if torch.cuda.is_available():
+        print("GPU :", torch.cuda.get_device_name(0))
+        print("Compute capability :", torch.cuda.get_device_capability(0))
+        print(
+            "VRAM :",
+            round(torch.cuda.get_device_properties(0).total_memory / 1024**3, 2),
+            "GB"
+        )
+
+except Exception as e:
+    print("Torch erreur :", repr(e))
