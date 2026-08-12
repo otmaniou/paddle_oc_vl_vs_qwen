@@ -1,70 +1,20 @@
-import torch
 import finegrained_fp8
-import time
+import inspect
 
-print("=== TEST W8A8 FP8 MATMUL ===")
+print("=== SOURCE / SIGNATURES UTILES ===")
 
-# Matrices compatibles
-M = 256
-K = 256
-N = 256
+for name in dir(finegrained_fp8):
+    if "quant" in name.lower():
+        obj = getattr(finegrained_fp8, name)
 
-A = torch.randn(
-    (M, K),
-    device="cuda",
-    dtype=torch.bfloat16
-)
+        print("\nFUNCTION :", name)
 
-B = torch.randn(
-    (N, K),
-    device="cuda",
-    dtype=torch.bfloat16
-)
+        try:
+            print("SIGNATURE:", inspect.signature(obj))
+        except Exception as e:
+            print("Signature indisponible:", e)
 
-# Quantification FP8
-A_fp8, As = finegrained_fp8.fp8_act_quant(
-    A,
-    block_size=128
-)
-
-B_fp8, Bs = finegrained_fp8.fp8_act_quant(
-    B,
-    block_size=128
-)
-
-print("A FP8 :", A_fp8.shape, A_fp8.dtype)
-print("As    :", As.shape)
-
-print("B FP8 :", B_fp8.shape, B_fp8.dtype)
-print("Bs    :", Bs.shape)
-
-torch.cuda.synchronize()
-t0 = time.perf_counter()
-
-try:
-
-    C = finegrained_fp8.w8a8_block_fp8_matmul(
-        A_fp8,
-        B_fp8,
-        As,
-        Bs,
-        block_size=[128, 128],
-        output_dtype=torch.bfloat16
-    )
-
-    torch.cuda.synchronize()
-
-    elapsed = (time.perf_counter() - t0) * 1000
-
-    print("\n=== RESULTAT ===")
-    print("FP8 MATMUL : OK")
-    print("C shape  :", C.shape)
-    print("C dtype  :", C.dtype)
-    print("C device :", C.device)
-    print("Temps    :", round(elapsed, 3), "ms")
-
-except Exception as e:
-
-    print("\n=== ERREUR MATMUL ===")
-    print(type(e).__name__, ":", e)
-    raise
+        try:
+            print(inspect.getsource(obj)[:4000])
+        except Exception:
+            pass
