@@ -1,0 +1,65 @@
+python --version
+
+pip show paddlepaddle-gpu
+pip show paddleocr
+pip show paddlex
+
+pip show torch
+pip show torchvision
+
+pip show transformers
+pip show accelerate
+pip show safetensors
+pip show tokenizers
+pip show qwen-vl-utils
+
+nvidia-smi
+
+
+
+
+
+
+
+python - <<'PY'
+import sys
+print("Python :", sys.version)
+
+print("\n=== PYTORCH ===")
+import torch
+print("torch :", torch.__version__)
+print("CUDA build :", torch.version.cuda)
+print("CUDA disponible :", torch.cuda.is_available())
+
+if torch.cuda.is_available():
+    print("GPU :", torch.cuda.get_device_name(0))
+    print("VRAM :", round(torch.cuda.get_device_properties(0).total_memory/1024**3,2), "GB")
+
+print("\n=== PADDLE ===")
+try:
+    import paddle
+    print("Paddle :", paddle.__version__)
+    print("Compiled CUDA :", paddle.version.cuda())
+    print("CUDA Paddle :", paddle.device.is_compiled_with_cuda())
+    print("Device :", paddle.device.get_device())
+except Exception as e:
+    print("ERREUR PADDLE :", repr(e))
+
+print("\n=== OCR ===")
+try:
+    import paddleocr
+    print("PaddleOCR :", paddleocr.__version__)
+except Exception as e:
+    print("ERREUR PaddleOCR :", repr(e))
+
+print("\n=== TRANSFORMERS ===")
+import transformers
+print("Transformers :", transformers.__version__)
+
+print("\n=== QWEN-VL-UTILS ===")
+try:
+    import qwen_vl_utils
+    print("Qwen VL utils : OK")
+except Exception as e:
+    print("ERREUR :", repr(e))
+PY
