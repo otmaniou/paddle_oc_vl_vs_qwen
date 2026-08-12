@@ -2,21 +2,22 @@ import torch
 import finegrained_fp8
 import time
 
-print("=== TEST GPU FINEGRAINED FP8 ===")
+print("=== TEST REEL FP8_ACT_QUANT ===")
 
 print("Torch :", torch.__version__)
 print("CUDA  :", torch.version.cuda)
 print("GPU   :", torch.cuda.get_device_name(0))
 
-# Tensor BF16 sur GPU
+# Création d'un tensor BF16 directement sur le H100
 x = torch.randn(
     (256, 256),
     device="cuda",
     dtype=torch.bfloat16
 )
 
-torch.cuda.synchronize()
+print("\nInput :", x.shape, x.dtype, x.device)
 
+torch.cuda.synchronize()
 t0 = time.perf_counter()
 
 try:
@@ -28,20 +29,19 @@ try:
     torch.cuda.synchronize()
     elapsed = (time.perf_counter() - t0) * 1000
 
-    print("\nTEST : OK")
-    print("Input shape :", x.shape)
-    print("Input dtype :", x.dtype)
+    print("\n=== RESULTAT ===")
+    print("FP8 QUANTIZATION : OK")
+    print("FP8 shape  :", x_fp8.shape)
+    print("FP8 dtype  :", x_fp8.dtype)
+    print("FP8 device :", x_fp8.device)
 
-    print("\nFP8 shape   :", x_fp8.shape)
-    print("FP8 dtype   :", x_fp8.dtype)
-
-    print("\nScale shape :", scale.shape)
+    print("Scale shape :", scale.shape)
     print("Scale dtype :", scale.dtype)
+    print("Scale device:", scale.device)
 
-    print("\nDevice FP8  :", x_fp8.device)
-    print("Temps       :", round(elapsed, 3), "ms")
+    print("Temps :", round(elapsed, 3), "ms")
 
 except Exception as e:
-    print("\nTEST : ERREUR")
+    print("\n=== ERREUR ===")
     print(type(e).__name__, ":", e)
     raise
