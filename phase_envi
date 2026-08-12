@@ -63,3 +63,48 @@ try:
 except Exception as e:
     print("ERREUR :", repr(e))
 PY
+
+
+
+
+which python
+python --version
+python -m pip --version
+python -m pip show torch
+
+python - <<'PY'
+import paddle
+
+print("paddle module :", paddle)
+print("paddle file   :", getattr(paddle, "__file__", None))
+print("paddle path   :", getattr(paddle, "__path__", None))
+print("version       :", getattr(paddle, "__version__", "ABSENTE"))
+
+try:
+    print("CUDA compiled :", paddle.device.is_compiled_with_cuda())
+    print("device        :", paddle.device.get_device())
+except Exception as e:
+    print("ERREUR CUDA Paddle :", repr(e))
+PY
+
+
+
+
+
+ldconfig -p 2>/dev/null | grep libGL.so.1 || echo "libGL.so.1 ABSENTE"
+
+python - <<'PY'
+try:
+    import cv2
+    print("OpenCV OK :", cv2.__version__)
+except Exception as e:
+    print("OpenCV ERREUR :", repr(e))
+
+try:
+    import paddleocr
+    print("PaddleOCR OK :", paddleocr.__version__)
+except Exception as e:
+    print("PaddleOCR ERREUR :", repr(e))
+PY
+
+
