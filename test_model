@@ -1,0 +1,34 @@
+from transformers.integrations.hub_kernels import allow_all_hub_kernels
+
+
+
+t0 = time.time()
+
+processor = AutoProcessor.from_pretrained(
+    MODEL_PATH,
+    trust_remote_code=True,
+)
+
+with allow_all_hub_kernels():
+
+    model = AutoModelForMultimodalLM.from_pretrained(
+        MODEL_PATH,
+        device_map="auto",
+        trust_remote_code=True,
+        low_cpu_mem_usage=True,
+    )
+
+model.eval()
+
+MODEL_DEVICE = model.device
+
+print(f"✅ Modèle chargé en {time.time()-t0:.1f}s")
+print(f"   Classe : {model.__class__.__name__}")
+print(f"   Device : {MODEL_DEVICE}")
+
+if torch.cuda.is_available():
+    print(f"   GPU : {torch.cuda.get_device_name(0)}")
+    print(
+        f"   VRAM allouée : "
+        f"{torch.cuda.memory_allocated()/1024**3:.2f} GB"
+    )
