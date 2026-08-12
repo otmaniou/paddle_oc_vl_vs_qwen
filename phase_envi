@@ -1,40 +1,237 @@
-which python
+1. D'abord vérifier l'environnement vierge
+
+Ne fais encore aucune installation :
+
 python --version
+which python
 python -m pip --version
-python -m pip show torch
 
+nvidia-smi
 
+nvcc --version
+which nvcc
+
+On cherche idéalement :
+
+Python     3.11.x
+GPU        NVIDIA H100 80GB
+Driver     580.65.06 ou compatible
+CUDA drv  13.0
+
+nvcc est particulièrement important pour FineGrained-FP8 : Hugging Face indique que DeepGEMM compile ses kernels avec le toolkit CUDA complet et nécessite nvcc; pour Hopper/H100, CUDA Toolkit >= 12.3 convient.
+
+2. Outils Python de base
+python -m pip install --upgrade pip setuptools wheel packaging ninja
+
+Puis :
+
+python -m pip check
+3. PyTorch
+
+Puisque ton image Domino précédente fonctionnait déjà avec :
+
+torch 2.13.0+cu130
+CUDA PyTorch 13.0
+H100 détectée
+
+je ne forcerais pas une réinstallation de Torch si le nouvel environnement Domino fournit déjà cette version.
+
+Teste :
+
+python - <<'PY'
+import torch
+
+print("Torch :", torch.__version__)
+print("CUDA :", torch.version.cuda)
+print("CUDA disponible :", torch.cuda.is_available())
+
+if torch.cuda.is_available():
+    print("GPU :", torch.cuda.get_device_name(0))
+    print("Capability :", torch.cuda.get_device_capability(0))
+PY
+
+Si tu retrouves 2.13.0+cu130, garde-le.
+
+4. Stack Hugging Face / Qwen
+
+Installe ensuite les versions que nous avons déjà retenues :
+
+python -m pip install \
+  transformers==4.57.1 \
+  accelerate==1.14.0 \
+  safetensors==0.8.0 \
+  tokenizers==0.22.2 \
+  qwen-vl-utils==0.0.14
+
+Puis :
+
+python - <<'PY'
+import torch
+import transformers
+import accelerate
+import safetensors
+import tokenizers
+import qwen_vl_utils
+
+print("torch        :", torch.__version__)
+print("transformers :", transformers.__version__)
+print("accelerate   :", accelerate.__version__)
+print("safetensors  :", safetensors.__version__)
+print("tokenizers   :", tokenizers.__version__)
+print("qwen-vl-utils: OK")
+PY
+5. Packages images/PDF nécessaires au pipeline documentaire
+
+Pour ton pipeline OCR bancaire :
+
+python -m pip install \
+  pillow \
+  pymupdf \
+  pypdf \
+  opencv-python-headless \
+  numpy \
+  pandas \
+  openpyxl
+
+Je mets volontairement :
+
+opencv-python-headless
+
+plutôt que opencv-python.
+
+Dans Domino sans interface graphique, cela réduit notamment le risque de retomber sur ton erreur :
+
+libGL.so.1: cannot open shared object file
+6. Paddle : changement important
+
+Ici, je ne remettrais pas immédiatement :
+
+paddlepaddle-gpu==2.6.2
+
+avec :
+
+paddleocr==3.7.0
+
+La documentation actuelle indique que PaddleOCR 3.x avec le backend Paddle nécessite PaddlePaddle >=3.0 et fournit officiellement des wheels CUDA 12.6.
+
+Ton driver NVIDIA 580 peut exécuter cette stack même si nvidia-smi annonce CUDA 13.0 : Paddle précise qu'il faut surtout considérer la compatibilité du driver avec le wheel choisi, pas faire correspondre strictement le numéro affiché par nvidia-smi.
+
+Je partirais donc sur :
+
+python -m pip install paddlepaddle-gpu==3.2.0 \
+  -i https://www.paddlepaddle.org.cn/packages/stable/cu126/
+
+Puis arrêt et test :
 
 python - <<'PY'
 import paddle
 
-print("paddle module :", paddle)
-print("paddle file   :", getattr(paddle, "__file__", None))
-print("paddle path   :", getattr(paddle, "__path__", None))
-print("version       :", getattr(paddle, "__version__", "ABSENTE"))
-
-try:
-    print("CUDA compiled :", paddle.device.is_compiled_with_cuda())
-    print("device        :", paddle.device.get_device())
-except Exception as e:
-    print("ERREUR CUDA Paddle :", repr(e))
+print("Paddle :", paddle.__version__)
+print("CUDA compiled :", paddle.device.is_compiled_with_cuda())
+print("Device :", paddle.device.get_device())
 PY
 
+Il faut obtenir quelque chose du type :
 
+Paddle : 3.2.0
+CUDA compiled : True
+Device : gpu:0
 
+avant d'aller plus loin.
 
-ldconfig -p 2>/dev/null | grep libGL.so.1 || echo "libGL.so.1 ABSENTE"
+7. PaddleOCR 3.7.0
+
+Seulement si l'étape précédente fonctionne :
+
+python -m pip install paddleocr==3.7.0
+
+Puis :
 
 python - <<'PY'
-try:
-    import cv2
-    print("OpenCV OK :", cv2.__version__)
-except Exception as e:
-    print("OpenCV ERREUR :", repr(e))
+import paddle
+import paddleocr
 
-try:
-    import paddleocr
-    print("PaddleOCR OK :", paddleocr.__version__)
-except Exception as e:
-    print("PaddleOCR ERREUR :", repr(e))
+print("Paddle    :", paddle.__version__)
+print("PaddleOCR :", paddleocr.__version__)
+print("GPU       :", paddle.device.get_device())
+print("PADDLE OCR IMPORT OK")
 PY
+
+PaddleOCR 3.7.0 est bien une version actuelle supportée par la documentation.
+
+8. FineGrained-FP8
+
+Pour ton autre modèle Qwen FP8 :
+
+python -m pip install -U kernels
+
+Puis vérifie :
+
+python - <<'PY'
+import kernels
+print("kernels import : OK")
+PY
+
+Le dépôt officiel du kernel indique ensuite :
+
+from kernels import get_kernel
+
+k = get_kernel(
+    "kernels-community/finegrained-fp8",
+    version=4
+)
+
+print(k)
+
+La version du kernel actuellement indiquée par le dépôt est version=4. Le kernel expose notamment matmul_2d, matmul_batched et matmul_grouped.
+
+C'est donc cette information qu'il faudra retenir pour notre nouvel environnement, plutôt que mon ancien raccourci sur une version 0.15.x.
+
+9. Flash-Attention : en dernier uniquement
+
+Ne commence surtout pas par flash-attn.
+
+Une fois Qwen et Paddle fonctionnels, on pourra déterminer si ton pipeline en a réellement besoin. Si oui, l'installation se fera typiquement avec :
+
+python -m pip install flash-attn --no-build-isolation
+
+et non la commande qui t'a donné :
+
+ModuleNotFoundError: No module named 'torch'
+
+Mais je préfère vérifier la compatibilité exacte avec ton nouveau Torch avant de l'installer.
+
+Ordre final
+
+Ton environnement doit donc être construit comme ceci :
+
+ENVIRONNEMENT DOMINO VIERGE
+        │
+        ├── 1. Python 3.11
+        │
+        ├── 2. NVIDIA Driver / H100 / nvcc
+        │
+        ├── 3. pip + setuptools + wheel + packaging + ninja
+        │
+        ├── 4. PyTorch GPU
+        │
+        ├── 5. Transformers 4.57.1
+        │      Accelerate 1.14.0
+        │      Safetensors 0.8.0
+        │      Tokenizers 0.22.2
+        │      qwen-vl-utils 0.0.14
+        │
+        ├── 6. Pillow / PyMuPDF / PyPDF
+        │      OpenCV-headless / pandas / openpyxl
+        │
+        ├── 7. PaddlePaddle-GPU 3.2.0 cu126
+        │
+        ├── 8. PaddleOCR 3.7.0
+        │
+        ├── 9. kernels
+        │      └── finegrained-fp8 version=4
+        │
+        └── 10. flash-attn
+               seulement si nécessaire
+
+Je te recommande de ne pas lancer les dix étapes d'un coup. Sur un environnement vierge, fais d'abord étapes 1 à 3 et le test PyTorch, puis montre-moi la sortie. Cela nous évitera de recréer les conflits de l'ancien environnement.
