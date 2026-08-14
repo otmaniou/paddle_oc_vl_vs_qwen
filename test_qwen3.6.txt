@@ -1,31 +1,63 @@
 # ─────────────────────────────────────────────────────────────
-# 4.6 — Dequantize FP8 → bf16 au chargement (aucun kernel requis)
+# 4.5 (v3) — bind de la VRAIE fonction matmul du .so + shim
 # ─────────────────────────────────────────────────────────────
-import dataclasses, gc
-from transformers.integrations.finegrained_fp8 import FP8Config
-
-print('Champs FP8Config :', [f.name for f in dataclasses.fields(FP8Config)])
-
-# Neutralise le shim kernel éventuel de la 4.5
+import sys, types, importlib
+from types import SimpleNamespace
+from pathlib import Path
 import transformers.integrations.finegrained_fp8 as tf_fg
-tf_fg._load_finegrained_fp8_kernel = None if False else tf_fg._load_finegrained_fp8_kernel
 
-del model
-gc.collect(); torch.cuda.empty_cache()
+FP8_V4 = Path('/domino/edv/modelhub/ModelHub-model-huggingface-kernels-community/finegrained-fp8/v4')
 
-model = AutoModelForImageTextToText.from_pretrained(
-    MODEL_PATH,
-    dtype=torch.bfloat16,
-    device_map='auto',
-    trust_remote_code=True,
-    low_cpu_mem_usage=True,
-    quantization_config=FP8Config(dequantize=True),   # ← scales consommées au load
-)
-model.eval()
+init_files = sorted(FP8_V4.rglob('__init__.py'))
+pkg_parent = init_files[0].parent.parent
+if str(pkg_parent) not in sys.path:
+    sys.path.insert(0, str(pkg_parent))
+kernel_mod = importlib.import_module(init_files[0].parent.name)   # ex 'torch-cuda'
 
-fp8_left = [p for p in model.parameters() if p.dtype == torch.float8_e4m3fn]
-print(f'✅ Modèle bf16 chargé — float8 restants : {len(fp8_left)} (doit être 0)')
-print(f'   VRAM libre : {torch.cuda.mem_get_info()[0]/1e9:.1f} GB')
+print('package dir :', [n for n in dir(kernel_mod) if not n.startswith('_')])
+print('sous-modules:', [n for n in dir(kernel_mod)
+                         if isinstance(getattr(kernel_mod, n), types.ModuleType)])
 
-# Ajuste le batch : bf16 27B ≈ 54 GB → ~30 GB libres
-GPU_BATCH_SIZE = 8
+PREFER = ('matmul', 'fp8_matmul', 'finegrained_fp8_matmul',
+          'fp8_block_scaled_matmul', 'forward', 'fwd', 'apply')
+
+def find_callable(mod):
+    # 1) attribut direct callable (pas un module)
+    for name in PREFER:
+        f = getattr(mod, name, None)
+        if callable(f) and not isinstance(f, types.ModuleType):
+            return f, f'.{name}'
+    # 2) fonction à l'intérieur des sous-modules (.so)
+    for sub_name in dir(mod):
+        sub = getattr(mod, sub_name)
+        if isinstance(sub, types.ModuleType):
+            for name in PREFER:
+                f = getattr(sub, name, None)
+                if callable(f):
+                    return f, f'.{sub_name}.{name}'
+            for name in dir(sub):                      # fallback : 1er callable public
+                if name.startswith('__'): continue
+                f = getattr(sub, name)
+                if callable(f):
+                    return f, f'.{sub_name}.{name}'
+    # 3) n'importe quel callable public au niveau paquet
+    for name in dir(mod):
+        if name.startswith('_'): continue
+        f = getattr(mod, name)
+        if callable(f) and not isinstance(f, types.ModuleType):
+            return f, f'.{name}'
+    return None, None
+
+fn, where = find_callable(kernel_mod)
+if fn is None:
+    sub = getattr(kernel_mod, 'matmul', None)
+    if isinstance(sub, types.ModuleType):
+        print('matmul .so dir :', [n for n in dir(sub) if not n.startswith('__')])
+    raise RuntimeError('❌ aucune fonction matmul trouvée → envoie les dir() affichés')
+
+print(f'✅ fonction matmul trouvée en {where}')
+
+# Shim exposant .matmul comme l'attend transformers
+tf_fg._FINEGRAINED_FP8 = SimpleNamespace(matmul=fn)
+tf_fg._load_finegrained_fp8_kernel = lambda: None
+print('✅ shim injecté dans transformers')
