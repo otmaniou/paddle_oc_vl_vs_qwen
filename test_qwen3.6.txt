@@ -1,6 +1,33 @@
-for tp in [INPUT_DIR / 'ALGAN_IBRAHIM_202510.PDF',
-           INPUT_DIR / '02700731011128500104-202510.PDF']:
-    if tp.exists():
-        pages = pdf_to_pages(tp)
-        rep = ask_single(PROMPT_UNIVERSEL, pages[0]['image'])
-        print(tp.name, '→', rep['text'][:600], '\n')
+t0 = time.time()
+
+# ── Validation GPU ──
+major, minor = torch.cuda.get_device_capability()
+free_mem, total_mem = torch.cuda.mem_get_info(0)
+print(f'GPU : {torch.cuda.get_device_name(0)} | SM {major}.{minor} | {total_mem/1e9:.1f} GB | libre {free_mem/1e9:.1f} GB')
+
+# ── Processor ──
+processor = AutoProcessor.from_pretrained(
+    MODEL_PATH, trust_remote_code=True,
+    min_pixels=MIN_PIXELS, max_pixels=MAX_PIXELS,
+)
+processor.tokenizer.padding_side = 'left'
+
+# ── Modèle : FP8 déquantisé → bf16, UN SEUL chargement, zéro kernel ──
+try:
+    from transformers.integrations.finegrained_fp8 import FineGrainedFP8Config as FP8Config
+except ImportError:
+    from transformers import FineGrainedFP8Config as FP8Config
+
+model = AutoModelForImageTextToText.from_pretrained(
+    MODEL_PATH,
+    dtype=torch.bfloat16,
+    device_map='auto',
+    trust_remote_code=True,
+    low_cpu_mem_usage=True,
+    quantization_config=FP8Config(dequantize=True),
+)
+model.eval()
+
+fp8_left = [p for p in model.parameters() if p.dtype == torch.float8_e4m3fn]
+print(f'✅ Modèle bf16 chargé en {time.time()-t0:.1f}s — float8 restants : {len(fp8_left)}')
+print(f'   VRAM libre : {torch.cuda.mem_get_info(0)[0]/1e9:.1f} GB')
