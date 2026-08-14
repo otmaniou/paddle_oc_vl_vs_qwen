@@ -1,69 +1,63 @@
 # ─────────────────────────────────────────────────────────────
-# 4.5 (v2) — Kernel finegrained-fp8 depuis ModelHub (paquet dans build/)
+# 4.5 (v3) — bind de la VRAIE fonction matmul du .so + shim
 # ─────────────────────────────────────────────────────────────
-import sys, importlib, zipfile
+import sys, types, importlib
+from types import SimpleNamespace
 from pathlib import Path
 import transformers.integrations.finegrained_fp8 as tf_fg
 
-FP8_DIRS = [
-    Path('/domino/edv/modelhub/ModelHub-model-huggingface-kernels-community/finegrained-fp8/v4'),
-    Path('/domino/edv/modelhub/ModelHub-model-huggingface-kernels-community/finegrained-fp8/main'),
-]
+FP8_V4 = Path('/domino/edv/modelhub/ModelHub-model-huggingface-kernels-community/finegrained-fp8/v4')
 
-EXTRACT_ROOT = OUTPUT_DIR / 'fp8_kernel_extracted'
-EXTRACT_ROOT.mkdir(parents=True, exist_ok=True)
-pyver = f'cp{sys.version_info.major}{sys.version_info.minor}'   # cp311 chez toi
+init_files = sorted(FP8_V4.rglob('__init__.py'))
+pkg_parent = init_files[0].parent.parent
+if str(pkg_parent) not in sys.path:
+    sys.path.insert(0, str(pkg_parent))
+kernel_mod = importlib.import_module(init_files[0].parent.name)   # ex 'torch-cuda'
 
-def try_import_from_dir(dirpath: Path):
-    """Ajoute dirpath au sys.path et importe le 1er paquet Python trouvé."""
-    if str(dirpath) not in sys.path:
-        sys.path.insert(0, str(dirpath))
-    for sub in sorted(dirpath.iterdir()):
-        if sub.is_dir() and (sub / '__init__.py').exists():
-            return importlib.import_module(sub.name)
-    raise ImportError(f'aucun paquet dans {dirpath}')
+print('package dir :', [n for n in dir(kernel_mod) if not n.startswith('_')])
+print('sous-modules:', [n for n in dir(kernel_mod)
+                         if isinstance(getattr(kernel_mod, n), types.ModuleType)])
 
-kernel_mod, used = None, None
+PREFER = ('matmul', 'fp8_matmul', 'finegrained_fp8_matmul',
+          'fp8_block_scaled_matmul', 'forward', 'fwd', 'apply')
 
-for tag, base in [('v4', FP8_DIRS[0]), ('v1', FP8_DIRS[1])]:
-    if not base.exists():
-        print(f'⚠️  {tag} : répertoire introuvable'); continue
+def find_callable(mod):
+    # 1) attribut direct callable (pas un module)
+    for name in PREFER:
+        f = getattr(mod, name, None)
+        if callable(f) and not isinstance(f, types.ModuleType):
+            return f, f'.{name}'
+    # 2) fonction à l'intérieur des sous-modules (.so)
+    for sub_name in dir(mod):
+        sub = getattr(mod, sub_name)
+        if isinstance(sub, types.ModuleType):
+            for name in PREFER:
+                f = getattr(sub, name, None)
+                if callable(f):
+                    return f, f'.{sub_name}.{name}'
+            for name in dir(sub):                      # fallback : 1er callable public
+                if name.startswith('__'): continue
+                f = getattr(sub, name)
+                if callable(f):
+                    return f, f'.{sub_name}.{name}'
+    # 3) n'importe quel callable public au niveau paquet
+    for name in dir(mod):
+        if name.startswith('_'): continue
+        f = getattr(mod, name)
+        if callable(f) and not isinstance(f, types.ModuleType):
+            return f, f'.{name}'
+    return None, None
 
-    # ── a) paquet déjà déployé quelque part sous build/ ──
-    init_files = sorted(base.rglob('__init__.py'))
-    if init_files:
-        try:
-            kernel_mod = try_import_from_dir(init_files[0].parent.parent)
-            used = f'{tag} paquet déployé ({init_files[0].parent.name})'
-            break
-        except Exception as e:
-            print(f'⚠️  {tag} paquet : {e}')
+fn, where = find_callable(kernel_mod)
+if fn is None:
+    sub = getattr(kernel_mod, 'matmul', None)
+    if isinstance(sub, types.ModuleType):
+        print('matmul .so dir :', [n for n in dir(sub) if not n.startswith('__')])
+    raise RuntimeError('❌ aucune fonction matmul trouvée → envoie les dir() affichés')
 
-    # ── b) wheels dans build/ → décompression locale (offline) ──
-    wheels = sorted(base.rglob('*.whl'), key=lambda w: (pyver not in w.name, w.name))
-    for w in wheels:
-        try:
-            dest = EXTRACT_ROOT / f'{tag}_{w.stem}'
-            if not dest.exists():
-                with zipfile.ZipFile(w) as z:
-                    z.extractall(dest)
-            kernel_mod = try_import_from_dir(dest)
-            used = f'{tag} wheel {w.name}'
-            break
-        except Exception as e:
-            print(f'⚠️  {tag} wheel {w.name} : {e}')
-    if kernel_mod:
-        break
+print(f'✅ fonction matmul trouvée en {where}')
 
-if kernel_mod is None:
-    for tag, base in [('v4', FP8_DIRS[0]), ('v1', FP8_DIRS[1])]:
-        print(f'--- contenu {tag} ---')
-        for p in sorted(base.rglob('*')):
-            if p.is_file(): print('  ', p.relative_to(base))
-    raise RuntimeError('❌ Toujours non chargeable → ENVOIE la liste affichée ci-dessus')
-
-# Injection dans transformers
-tf_fg._FINEGRAINED_FP8 = kernel_mod
+# Shim exposant .matmul comme l'attend transformers
+tf_fg._FINEGRAINED_FP8 = SimpleNamespace(matmul=fn)
 tf_fg._load_finegrained_fp8_kernel = lambda: None
-assert hasattr(kernel_mod, 'matmul'), '❌ module sans .matmul'
-print(f'✅ Kernel injecté via {used} — .matmul OK')
+print('✅ shim injecté dans transformers')
