@@ -1,5 +1,31 @@
-test_path = INPUT_DIR / 'ALGAN_IBRAHIM_202510.PDF'
-if not test_path.exists(): test_path = pdfs[0]
-pages = pdf_to_pages(test_path)
-rep = ask_single(PROMPT_UNIVERSEL, pages[0]['image'])
-print(rep['text'][:2000])
+# ─────────────────────────────────────────────────────────────
+# 4.6 — Dequantize FP8 → bf16 au chargement (aucun kernel requis)
+# ─────────────────────────────────────────────────────────────
+import dataclasses, gc
+from transformers.integrations.finegrained_fp8 import FP8Config
+
+print('Champs FP8Config :', [f.name for f in dataclasses.fields(FP8Config)])
+
+# Neutralise le shim kernel éventuel de la 4.5
+import transformers.integrations.finegrained_fp8 as tf_fg
+tf_fg._load_finegrained_fp8_kernel = None if False else tf_fg._load_finegrained_fp8_kernel
+
+del model
+gc.collect(); torch.cuda.empty_cache()
+
+model = AutoModelForImageTextToText.from_pretrained(
+    MODEL_PATH,
+    dtype=torch.bfloat16,
+    device_map='auto',
+    trust_remote_code=True,
+    low_cpu_mem_usage=True,
+    quantization_config=FP8Config(dequantize=True),   # ← scales consommées au load
+)
+model.eval()
+
+fp8_left = [p for p in model.parameters() if p.dtype == torch.float8_e4m3fn]
+print(f'✅ Modèle bf16 chargé — float8 restants : {len(fp8_left)} (doit être 0)')
+print(f'   VRAM libre : {torch.cuda.mem_get_info()[0]/1e9:.1f} GB')
+
+# Ajuste le batch : bf16 27B ≈ 54 GB → ~30 GB libres
+GPU_BATCH_SIZE = 8
