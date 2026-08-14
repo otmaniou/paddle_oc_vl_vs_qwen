@@ -1,53 +1,69 @@
 # ─────────────────────────────────────────────────────────────
-# 4.5 — Kernel finegrained-fp8 (requis FP8 block-wise, MÊME sur H100)
-# À exécuter AVANT tout generate() (benchmark / pipeline)
+# 4.5 (v2) — Kernel finegrained-fp8 depuis ModelHub (paquet dans build/)
 # ─────────────────────────────────────────────────────────────
-import sys, importlib
+import sys, importlib, zipfile
 from pathlib import Path
 import transformers.integrations.finegrained_fp8 as tf_fg
 
 FP8_DIRS = [
-    Path('/domino/edv/modelhub/ModelHub-model-huggingface-kernels-community/finegrained-fp8/v4'),    # priorité
-    Path('/domino/edv/modelhub/ModelHub-model-huggingface-kernels-community/finegrained-fp8/main'), # fallback
+    Path('/domino/edv/modelhub/ModelHub-model-huggingface-kernels-community/finegrained-fp8/v4'),
+    Path('/domino/edv/modelhub/ModelHub-model-huggingface-kernels-community/finegrained-fp8/main'),
 ]
 
-def load_kernel_from_dir(path: Path):
-    if str(path) not in sys.path:
-        sys.path.insert(0, str(path))
-    # cas 1 : paquet finegrained_fp8/ dans le dépôt
-    try:
-        return importlib.import_module('finegrained_fp8')
-    except Exception:
-        pass
-    # cas 2 : la racine du dépôt est elle-même un paquet
-    if (path / '__init__.py').exists():
-        parent = str(path.parent)
-        if parent not in sys.path:
-            sys.path.insert(0, parent)
-        return importlib.import_module(path.name)
-    # cas 3 : un sous-répertoire paquet
-    for sub in sorted(path.iterdir()):
+EXTRACT_ROOT = OUTPUT_DIR / 'fp8_kernel_extracted'
+EXTRACT_ROOT.mkdir(parents=True, exist_ok=True)
+pyver = f'cp{sys.version_info.major}{sys.version_info.minor}'   # cp311 chez toi
+
+def try_import_from_dir(dirpath: Path):
+    """Ajoute dirpath au sys.path et importe le 1er paquet Python trouvé."""
+    if str(dirpath) not in sys.path:
+        sys.path.insert(0, str(dirpath))
+    for sub in sorted(dirpath.iterdir()):
         if sub.is_dir() and (sub / '__init__.py').exists():
             return importlib.import_module(sub.name)
-    raise ImportError(f'Aucun paquet importable dans {path}')
+    raise ImportError(f'aucun paquet dans {dirpath}')
 
-kernel_mod = None
-for path in FP8_DIRS:
-    if not path.exists():
-        print(f'⚠️  {path.name} : répertoire introuvable'); continue
-    try:
-        kernel_mod = load_kernel_from_dir(path)
-        print(f'✅ Kernel local chargé depuis {path.name}')
+kernel_mod, used = None, None
+
+for tag, base in [('v4', FP8_DIRS[0]), ('v1', FP8_DIRS[1])]:
+    if not base.exists():
+        print(f'⚠️  {tag} : répertoire introuvable'); continue
+
+    # ── a) paquet déjà déployé quelque part sous build/ ──
+    init_files = sorted(base.rglob('__init__.py'))
+    if init_files:
+        try:
+            kernel_mod = try_import_from_dir(init_files[0].parent.parent)
+            used = f'{tag} paquet déployé ({init_files[0].parent.name})'
+            break
+        except Exception as e:
+            print(f'⚠️  {tag} paquet : {e}')
+
+    # ── b) wheels dans build/ → décompression locale (offline) ──
+    wheels = sorted(base.rglob('*.whl'), key=lambda w: (pyver not in w.name, w.name))
+    for w in wheels:
+        try:
+            dest = EXTRACT_ROOT / f'{tag}_{w.stem}'
+            if not dest.exists():
+                with zipfile.ZipFile(w) as z:
+                    z.extractall(dest)
+            kernel_mod = try_import_from_dir(dest)
+            used = f'{tag} wheel {w.name}'
+            break
+        except Exception as e:
+            print(f'⚠️  {tag} wheel {w.name} : {e}')
+    if kernel_mod:
         break
-    except Exception as e:
-        print(f'⚠️  {path.name} : {e}')
 
 if kernel_mod is None:
-    raise RuntimeError('❌ Kernel local non chargeable → voir fallback dequantize (cellule 4.6)')
+    for tag, base in [('v4', FP8_DIRS[0]), ('v1', FP8_DIRS[1])]:
+        print(f'--- contenu {tag} ---')
+        for p in sorted(base.rglob('*')):
+            if p.is_file(): print('  ', p.relative_to(base))
+    raise RuntimeError('❌ Toujours non chargeable → ENVOIE la liste affichée ci-dessus')
 
-# Injection dans transformers (les noms exacts vus dans ton traceback)
+# Injection dans transformers
 tf_fg._FINEGRAINED_FP8 = kernel_mod
 tf_fg._load_finegrained_fp8_kernel = lambda: None
-
-assert hasattr(kernel_mod, 'matmul'), '❌ module sans .matmul — mauvais paquet'
-print('✅ Kernel injecté dans transformers — .matmul OK')
+assert hasattr(kernel_mod, 'matmul'), '❌ module sans .matmul'
+print(f'✅ Kernel injecté via {used} — .matmul OK')
