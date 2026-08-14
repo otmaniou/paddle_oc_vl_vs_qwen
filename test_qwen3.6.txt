@@ -1,31 +1,6 @@
-# ─────────────────────────────────────────────────────────────
-# 4.6 — Dequantize FP8 → bf16 au chargement (aucun kernel requis)
-# ─────────────────────────────────────────────────────────────
-import dataclasses, gc
-
-# Nom exact dans cette version de transformers : FineGrainedFP8Config
-try:
-    from transformers.integrations.finegrained_fp8 import FineGrainedFP8Config as FP8Config
-except ImportError:
-    from transformers import FineGrainedFP8Config as FP8Config
-
-print('Champs FP8Config :', [f.name for f in dataclasses.fields(FP8Config)])
-
-del model
-gc.collect(); torch.cuda.empty_cache()
-
-model = AutoModelForImageTextToText.from_pretrained(
-    MODEL_PATH,
-    dtype=torch.bfloat16,
-    device_map='auto',
-    trust_remote_code=True,
-    low_cpu_mem_usage=True,
-    quantization_config=FP8Config(dequantize=True),   # scales consommées au load
-)
-model.eval()
-
-fp8_left = [p for p in model.parameters() if p.dtype == torch.float8_e4m3fn]
-print(f'✅ Modèle bf16 chargé — float8 restants : {len(fp8_left)} (doit être 0)')
-print(f'   VRAM libre : {torch.cuda.mem_get_info()[0]/1e9:.1f} GB')
-
-GPU_BATCH_SIZE = 8   # bf16 27B ≈ 54 GB → ~30 GB libres
+for tp in [INPUT_DIR / 'ALGAN_IBRAHIM_202510.PDF',
+           INPUT_DIR / '02700731011128500104-202510.PDF']:
+    if tp.exists():
+        pages = pdf_to_pages(tp)
+        rep = ask_single(PROMPT_UNIVERSEL, pages[0]['image'])
+        print(tp.name, '→', rep['text'][:600], '\n')
