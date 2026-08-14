@@ -1,5 +1,7 @@
 import gc
 
+DOSSIERS_PAR_BATCH = 4    # 4 dossiers × ~4 pages = batch de 16 pages
+
 deja_traites = {f.stem for f in JSON_DIR.glob('*.json')}
 a_traiter    = [p for p in pdfs if p.stem not in deja_traites]
 log(f'À traiter : {len(a_traiter)} | déjà traités : {len(deja_traites)}')
@@ -51,13 +53,12 @@ def finalize_dossier(pdf_path, pages_raw, t0):
         n_err += 1
         log(f'[{n_ok+n_err:>4}/{len(a_traiter)}] ❌ {pdf_path.name} — {e}')
 
-# ── Boucle principale : paires de dossiers → batch GPU de 8 pages ──
-for i in range(0, len(a_traiter), 2):
-    pair = a_traiter[i:i+2]
-    batch_pages = []
-    meta = {}                                   # pdf -> (t0, [raw results])
+# ── Boucle : groupes de 4 dossiers → 1 batch de ~16 pages ──
+for i in range(0, len(a_traiter), DOSSIERS_PAR_BATCH):
+    group = a_traiter[i:i+DOSSIERS_PAR_BATCH]
+    batch_pages, meta = [], {}
 
-    for pdf in pair:
+    for pdf in group:
         t0 = time.time()
         try:
             pages   = pdf_to_pages(pdf)
@@ -69,20 +70,34 @@ for i in range(0, len(a_traiter), 2):
         meta[pdf] = (t0, [])
         batch_pages.extend((pdf, p) for p in actives)
 
-    for bs in range(0, len(batch_pages), GPU_BATCH_SIZE):
-        batch = batch_pages[bs:bs + GPU_BATCH_SIZE]
-        reps  = ask_batch(PROMPT_UNIVERSEL, [pg['image'] for _, pg in batch])
-        for (pdf, pg), rep in zip(batch, reps):
-            meta[pdf][1].append({
-                'index': pg['index'], 'text': rep['text'],
-                'tokens_in': rep['tokens_in'], 'tokens_out': rep['tokens_out'],
-            })
-        gc.collect(); torch.cuda.empty_cache()
+    if not batch_pages:
+        continue
+
+    # Inférence 16 pages, repli automatique 8 si OOM
+    try:
+        reps = ask_batch(PROMPT_UNIVERSEL, [pg['image'] for _, pg in batch_pages])
+    except torch.cuda.OutOfMemoryError:
+        torch.cuda.empty_cache()
+        log('⚠️  OOM à 16 pages → repli batchs de 8')
+        reps = []
+        for bs in range(0, len(batch_pages), 8):
+            sub = batch_pages[bs:bs+8]
+            reps += ask_batch(PROMPT_UNIVERSEL, [pg['image'] for _, pg in sub])
+
+    for (pdf, pg), rep in zip(batch_pages, reps):
+        meta[pdf][1].append({
+            'index': pg['index'], 'text': rep['text'],
+            'tokens_in': rep['tokens_in'], 'tokens_out': rep['tokens_out'],
+        })
+    gc.collect(); torch.cuda.empty_cache()
 
     for pdf, (t0, raw) in meta.items():
         finalize_dossier(pdf, raw, t0)
 
-# ── Reconstruction Excel + stats ──
+    if i == 0:
+        log(f'   VRAM libre après 1er groupe : {torch.cuda.mem_get_info()[0]/1e9:.1f} GB')
+
+# ── Excel + stats ──
 log('Génération Excel...')
 rows = []
 for json_file in sorted(JSON_DIR.glob('*.json')):
