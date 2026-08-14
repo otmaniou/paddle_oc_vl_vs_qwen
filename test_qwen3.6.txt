@@ -1,33 +1,83 @@
-t0 = time.time()
+import gc, psutil
 
-# ── Validation GPU ──
-major, minor = torch.cuda.get_device_capability()
-free_mem, total_mem = torch.cuda.mem_get_info(0)
-print(f'GPU : {torch.cuda.get_device_name(0)} | SM {major}.{minor} | {total_mem/1e9:.1f} GB | libre {free_mem/1e9:.1f} GB')
+deja_traites = {f.stem for f in JSON_DIR.glob('*.json')}
+a_traiter    = [p for p in pdfs if p.stem not in deja_traites]
+log(f'À traiter : {len(a_traiter)} | déjà traités : {len(deja_traites)}')
 
-# ── Processor ──
-processor = AutoProcessor.from_pretrained(
-    MODEL_PATH, trust_remote_code=True,
-    min_pixels=MIN_PIXELS, max_pixels=MAX_PIXELS,
-)
-processor.tokenizer.padding_side = 'left'
+t_total = time.time()
+n_ok = n_err = 0
+grand_tok_in = grand_tok_out = 0
+TYPES_ATTENDUS = {'OV', 'ANNEXE_I', 'ANNEXE_II', 'BULLETIN'}
 
-# ── Modèle : FP8 déquantisé → bf16, UN SEUL chargement, zéro kernel ──
-try:
-    from transformers.integrations.finegrained_fp8 import FineGrainedFP8Config as FP8Config
-except ImportError:
-    from transformers import FineGrainedFP8Config as FP8Config
+for num, pdf_path in enumerate(a_traiter, start=1):
+    t_d0 = time.time()
+    try:
+        # ── Pages du dossier ──
+        pages   = pdf_to_pages(pdf_path)
+        actives = [p for p in pages if not is_blank(p['image'])]
 
-model = AutoModelForImageTextToText.from_pretrained(
-    MODEL_PATH,
-    dtype=torch.bfloat16,
-    device_map='auto',
-    trust_remote_code=True,
-    low_cpu_mem_usage=True,
-    quantization_config=FP8Config(dequantize=True),
-)
-model.eval()
+        # ── Inférence batch (dans le dossier) ──
+        results, doublons = {}, []
+        tok_in = tok_out = 0
+        for bs in range(0, len(actives), GPU_BATCH_SIZE):
+            batch = actives[bs:bs+GPU_BATCH_SIZE]
+            reps  = ask_batch(PROMPT_UNIVERSEL, [p['image'] for p in batch])
+            for page, rep in zip(batch, reps):
+                data = parse_json(rep['text'])
+                dt_  = data.get('type', 'INCONNU')
+                tok_in  += rep['tokens_in']
+                tok_out += rep['tokens_out']
+                if dt_ in ('AUTRE', 'INCONNU'): continue
+                data = normalise_doc(dt_, data)
+                if dt_ in results: doublons.append(dt_); continue
+                results[dt_] = data
+            gc.collect(); torch.cuda.empty_cache()
 
-fp8_left = [p for p in model.parameters() if p.dtype == torch.float8_e4m3fn]
-print(f'✅ Modèle bf16 chargé en {time.time()-t0:.1f}s — float8 restants : {len(fp8_left)}')
-print(f'   VRAM libre : {torch.cuda.mem_get_info(0)[0]/1e9:.1f} GB')
+        # ── JSON immédiat (checkpoint) ──
+        dt_dossier = round(time.time() - t_d0, 2)
+        pm = sorted(TYPES_ATTENDUS - set(results.keys()))
+        result = {
+            'fichier':          pdf_path.name,
+            'date_traitement':  datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'temps_total_s':    dt_dossier,          # ← vrai temps (rendu + inférence)
+            'tokens_in':        tok_in,
+            'tokens_out':       tok_out,
+            'tokens_total':     tok_in + tok_out,
+            'pages_trouvees':   ', '.join(sorted(results.keys())),
+            'pages_manquantes': ', '.join(pm) if pm else None,
+            'anomalies':        'DOUBLON: ' + ', '.join(doublons) if doublons else None,
+            **{t: results.get(t, {}) for t in TYPES_ATTENDUS},
+        }
+        with open(JSON_DIR / f'{pdf_path.stem}.json', 'w', encoding='utf-8') as f:
+            json.dump(result, f, ensure_ascii=False, indent=2, default=str)
+
+        n_ok += 1
+        grand_tok_in  += tok_in
+        grand_tok_out += tok_out
+
+        # ── Log live + ETA ──
+        eta = (time.time() - t_total) / num * (len(a_traiter) - num)
+        msg = (f'[{num:>4}/{len(a_traiter)}] ✅ {pdf_path.name} | {dt_dossier:.1f}s'
+               f' | tok={tok_in+tok_out} | {result["pages_trouvees"]}')
+        if result['pages_manquantes']: msg += f' | ⚠️  {result["pages_manquantes"]}'
+        if result['anomalies']:        msg += f' | 🔴 {result["anomalies"]}'
+        msg += f' | ETA {eta/3600:.1f}h'
+        log(msg)
+
+    except Exception as e:
+        n_err += 1
+        log(f'[{num:>4}/{len(a_traiter)}] ❌ {pdf_path.name} — {e}')
+        continue
+
+# ── Reconstruction Excel + stats finales ──
+log('Génération Excel...')
+rows = []
+for json_file in sorted(JSON_DIR.glob('*.json')):
+    with open(json_file, encoding='utf-8') as f:
+        rows.append(json.load(f))
+create_excel(EXCEL_PATH, rows)
+
+elapsed = time.time() - t_total
+log(f'✅ Terminé en {elapsed:.1f}s ({elapsed/max(1,n_ok):.1f}s/dossier)')
+log(f'   Traités : {n_ok} | Erreurs : {n_err}')
+log(f'   Tokens TOTAL : {grand_tok_in + grand_tok_out:,}')
